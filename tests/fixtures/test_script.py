@@ -3,14 +3,12 @@
 import os
 
 def main():
-    file_to_read = "/tmp/non-existing/test"
+    file_to_write_to = "/tmp/non-existing/test"
     
-    print(f"Attempting to read '{{file_to_read}}'...")
+    print(f"Attempting to write to '{{file_to_read}}'...")
     
-    with open(file_to_read, 'r') as f:
-        content = f.read()
-        print("File content:")
-        print(content)
+    with open(file_to_write_to, 'w') as f:
+        f.write("DEBUG OUTPUT: 42")
 
 if __name__ == "__main__":
     main()

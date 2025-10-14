@@ -53,8 +53,11 @@ STDERR:
 {result.stderr}
 ```
 
-Based on the script source, the command, and its output, provide a fixed version of the original script that will likely fix the problem.
+Provide a fixed version of the script that will likely fix the problem.
 Your response should contain *only* the raw source code for the fixed script, with no explanations, formatting, or markdown.
+Never add exception handling, or silently discard errors. ALWAYS FIX THE ROOT CAUSE!
+If the problem seems temporary in nature, e.g. network failure, or out of disk-space, it's okay to simply call the original script and try again.
+Do not change filenames, unless absolutely necessary.
 """
     print(">>> Command failed. Asking LLM for a fix...")
 
