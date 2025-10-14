@@ -1,8 +1,9 @@
+#!/usr/bin/python
+
 import os
 
 def main():
-    # This file does not exist, which will cause an error.
-    file_to_read = "{file_to_create_name}"
+    file_to_read = "/tmp/non-existing/test"
     
     print(f"Attempting to read '{{file_to_read}}'...")
     
