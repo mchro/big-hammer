@@ -42,6 +42,10 @@ class TestBigHammer(unittest.TestCase):
         if os.path.exists(fake_llm_path):
             os.remove(fake_llm_path)
 
+        state_file = os.path.join(self.test_dir, 'llm_call_count')
+        if os.path.exists(state_file):
+            os.remove(state_file)
+
     def test_big_hammer_fixes_script(self):
         # Path to big-hammer
         big_hammer_path = os.path.join(self.project_root, 'big-hammer')
@@ -76,19 +80,27 @@ class TestBigHammer(unittest.TestCase):
         big_hammer_path = os.path.join(self.project_root, 'big-hammer')
 
         # Create a fake `llm` that alternates between a bad fix and a good fix
+        # Use a state file to track whether this is the first or second attempt
+        state_file = os.path.join(self.test_dir, 'llm_call_count')
+        if os.path.exists(state_file):
+            os.remove(state_file)
+
         fake_llm_path = os.path.join(self.test_dir, 'llm')
         with open(fake_llm_path, 'w') as f:
             f.write("#!/bin/bash\n")
-            f.write("# Check if this is a retry by looking for 'already tried' in the arguments\n")
-            f.write("# The llm tool receives the prompt as the last argument\n")
-            f.write("if echo \"$@\" | grep -q 'already tried'; then\n")
+            f.write(f"STATE_FILE='{state_file}'\n")
+            f.write("# Consume stdin (required for llm tool)\n")
+            f.write("cat > /dev/null\n")
+            f.write("# Check if this is a retry by checking if state file exists\n")
+            f.write("if [ -f \"$STATE_FILE\" ]; then\n")
             f.write("  # Second attempt - return working fix\n")
             f.write("  echo 'import os\n")
             f.write("os.makedirs(\"/tmp/non-existing\", exist_ok=True)\n")
             f.write("with open(\"/tmp/non-existing/test\", \"w\") as f:\n")
             f.write("    f.write(\"success\")'\n")
             f.write("else\n")
-            f.write("  # First attempt - return broken fix\n")
+            f.write("  # First attempt - return broken fix and create state file\n")
+            f.write("  touch \"$STATE_FILE\"\n")
             f.write("  echo 'import os\n")
             f.write("with open(\"/tmp/still-non-existing/test\", \"w\") as f:\n")
             f.write("    f.write(\"fail\")'\n")

@@ -54,9 +54,9 @@ class TestNetworkError(unittest.TestCase):
         result = subprocess.run(command_to_run, capture_output=True, text=True, env=env, cwd=self.project_root)
 
         # Assertions
-        self.assertIn("LLM suggested a fix", result.stdout,
+        self.assertIn("Executing fixed script (attempt 1)", result.stdout,
                      f"Expected LLM fix message in stdout.\nStdout: {result.stdout}\nStderr: {result.stderr}")
-        self.assertIn("Fix execution finished", result.stdout,
+        self.assertIn("Fix succeeded on attempt 1/1!", result.stdout,
                      f"Expected fix execution to complete.\nStdout: {result.stdout}\nStderr: {result.stderr}")
 
 if __name__ == '__main__':
