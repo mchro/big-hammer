@@ -9,30 +9,35 @@ class TestBigHammer(unittest.TestCase):
         self.project_root = os.path.abspath(os.path.join(self.test_dir, '..'))
         self.script_name = 'test_script.py'
         self.script_path = os.path.join(self.test_dir, self.script_name)
-        self.file_to_create_name = "non_existent_file.txt"
-        self.file_to_create_path = os.path.join(self.project_root, self.file_to_create_name)
+        # The fixture writes to /tmp/non-existing/test
+        self.file_to_create_path = "/tmp/non-existing/test"
 
-        # Create the failing script for each test
+        # Copy the fixture to the test location
         fixture_path = os.path.join(self.test_dir, 'fixtures', 'test_script.py')
         with open(fixture_path, 'r') as f:
-            script_template = f.read()
-        
-        script_content = script_template.format(file_to_create_name=self.file_to_create_name)
+            script_content = f.read()
 
         with open(self.script_path, 'w') as f:
             f.write(script_content)
 
-        # Ensure the file that the script needs does not exist before the test
+        # Ensure the directory and file don't exist before the test
         if os.path.exists(self.file_to_create_path):
             os.remove(self.file_to_create_path)
+        if os.path.exists(os.path.dirname(self.file_to_create_path)):
+            os.rmdir(os.path.dirname(self.file_to_create_path))
 
     def tearDown(self):
         # Clean up the created file and script
         if os.path.exists(self.file_to_create_path):
             os.remove(self.file_to_create_path)
+        if os.path.exists(os.path.dirname(self.file_to_create_path)):
+            try:
+                os.rmdir(os.path.dirname(self.file_to_create_path))
+            except OSError:
+                pass  # Directory not empty or doesn't exist
         if os.path.exists(self.script_path):
             os.remove(self.script_path)
-        
+
         fake_llm_path = os.path.join(self.test_dir, 'llm')
         if os.path.exists(fake_llm_path):
             os.remove(fake_llm_path)
@@ -45,8 +50,11 @@ class TestBigHammer(unittest.TestCase):
         fake_llm_path = os.path.join(self.test_dir, 'llm')
         with open(fake_llm_path, 'w') as f:
             f.write("#!/bin/sh\n")
-            # The "fixed" script content is just creating the file.
-            f.write(f"echo 'with open(\"{self.file_to_create_name}\", \"w\") as f:\\n    f.write(\"hello\")'\n")
+            # The "fixed" script content creates the directory and the file
+            f.write("echo 'import os\n")
+            f.write("os.makedirs(\"/tmp/non-existing\", exist_ok=True)\n")
+            f.write("with open(\"/tmp/non-existing/test\", \"w\") as f:\n")
+            f.write("    f.write(\"hello\")'\n")
         
         subprocess.run(['chmod', '+x', fake_llm_path], check=True)
 
