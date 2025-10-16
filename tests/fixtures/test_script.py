@@ -1,11 +1,10 @@
 #!/usr/bin/python
-
 import os
 
 def main():
     file_to_write_to = "/tmp/non-existing/test"
     
-    print(f"Attempting to write to '{{file_to_read}}'...")
+    print(f"Attempting to write to '{file_to_write_to}'...")
     
     with open(file_to_write_to, 'w') as f:
         f.write("DEBUG OUTPUT: 42")

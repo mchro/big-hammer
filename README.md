@@ -43,18 +43,16 @@ Let's say you have a Python script `test_script.py` that tries to read a file th
 
 **test_script.py:**
 ```python
+#!/usr/bin/python
 import os
 
 def main():
-    # This file does not exist, which will cause an error.
-    file_to_read = "non_existent_file.txt"
+    file_to_write_to = "/tmp/non-existing/test"
     
-    print(f"Attempting to read '{file_to_read}'...")
+    print(f"Attempting to write to '{file_to_write_to}'...")
     
-    with open(file_to_read, 'r') as f:
-        content = f.read()
-        print("File content:")
-        print(content)
+    with open(file_to_write_to, 'w') as f:
+        f.write("DEBUG OUTPUT: 42")
 
 if __name__ == "__main__":
     main()
@@ -62,16 +60,20 @@ if __name__ == "__main__":
 
 Running this script directly will fail:
 ```bash
-$ python3 test_script.py
-Attempting to read 'non_existent_file.txt'...
+$ ./test_script.py
+Attempting to write to '/tmp/non-existing/test'...
 Traceback (most recent call last):
-  ...
-FileNotFoundError: [Errno 2] No such file or directory: 'non_existent_file.txt'
+  File "./test_script.py", line 13, in <module>
+    main()
+  File "./test_script.py", line 9, in main
+    with open(file_to_write_to, 'w') as f:
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+FileNotFoundError: [Errno 2] No such file or directory: '/tmp/non-existing/test'
 ```
 
 Now, run it with `big-hammer`:
 ```bash
-./big-hammer python3 test_script.py
+big-hammer ./test_script.py
 ```
 
 **What Happens:**
@@ -101,6 +103,6 @@ The output will look something like this:
 By default, `big-hammer` uses the `gpt-4o` model. You can specify a different model using the `-m` or `--model` flag.
 
 ```bash
-./big-hammer -m gpt-3.5-turbo python3 your_script.py
+big-hammer -m gpt-3.5-turbo python3 your_script.py
 ```
 This will pass the `-m gpt-3.5-turbo` argument directly to the `llm` utility.
