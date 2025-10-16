@@ -5,6 +5,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 
 def find_script_path(command_args):
     """Finds the path to the script in the command arguments."""
@@ -29,10 +30,266 @@ def run_command(command_args):
     """Runs a command and captures its output."""
     return subprocess.run(command_args, capture_output=True, text=True)
 
-def get_llm_fix(model, script_path, script_content, command_args, result, debug=False):
-    """Constructs a prompt and gets a fix from the llm utility."""
+def get_llm_fix(model, script_path, script_content, command_args, result, debug=False, attempts_history=None):
+    """Constructs a prompt and gets a fix from the llm utility.
+
+    Args:
+        model: The LLM model to use
+        script_path: Path to the script that failed
+        script_content: Content of the original script
+        command_args: The command that was run
+        result: subprocess.CompletedProcess from the failed run
+        debug: Whether to print debug information
+        attempts_history: List of previous fix attempts with their results
+
+    Returns:
+        The fixed script content suggested by the LLM
+    """
     command_str = " ".join(command_args)
+
+    # Build the history section if we have previous attempts
+    history_section = ""
+    if attempts_history:
+        history_section = f"\n\nI have already tried to fix this problem {len(attempts_history)} time(s). Here's what happened:\n\n"
+        for attempt in attempts_history:
+            history_section += f"Attempt {attempt['attempt_num']}:\n"
+            history_section += f"Fixed script:\n```\n{attempt['fix_code']}\n```\n"
+            history_section += f"Result: Failed with exit code {attempt['returncode']}\n"
+            if attempt['stdout']:
+                history_section += f"STDOUT:\n```\n{attempt['stdout']}\n```\n"
+            if attempt['stderr']:
+                history_section += f"STDERR:\n```\n{attempt['stderr']}\n```\n"
+            history_section += "\n"
+
     prompt = f"""
+---
+name: Systematic-Debugging
+description: Use when encountering any bug, test failure, or unexpected behavior, before proposing fixes - four-phase framework (root cause investigation, pattern analysis, hypothesis testing, implementation) that ensures understanding before attempting solutions
+---
+
+# Systematic Debugging
+
+## Overview
+
+Random fixes waste time and create new bugs. Quick patches mask underlying issues.
+
+**Core principle:** ALWAYS find root cause before attempting fixes. Symptom fixes are failure.
+
+**Violating the letter of this process is violating the spirit of debugging.**
+
+## The Iron Law
+
+```
+NO FIXES WITHOUT ROOT CAUSE INVESTIGATION FIRST
+```
+
+If you haven't completed Phase 1, you cannot propose fixes.
+
+## When to Use
+
+Use for ANY technical issue:
+- Test failures
+- Bugs in production
+- Unexpected behavior
+- Performance problems
+- Build failures
+- Integration issues
+
+**Use this ESPECIALLY when:**
+- Under time pressure (emergencies make guessing tempting)
+- "Just one quick fix" seems obvious
+- You've already tried multiple fixes
+- Previous fix didn't work
+- You don't fully understand the issue
+
+**Don't skip when:**
+- Issue seems simple (simple bugs have root causes too)
+- You're in a hurry (rushing guarantees rework)
+- Manager wants it fixed NOW (systematic is faster than thrashing)
+
+## The Four Phases
+
+You MUST complete each phase before proceeding to the next.
+
+### Phase 1: Root Cause Investigation
+
+**BEFORE attempting ANY fix:**
+
+1. **Read Error Messages Carefully**
+   - Don't skip past errors or warnings
+   - They often contain the exact solution
+   - Read stack traces completely
+   - Note line numbers, file paths, error codes
+
+2. **Reproduce Consistently**
+   - Can you trigger it reliably?
+   - What are the exact steps?
+   - Does it happen every time?
+   - If not reproducible → gather more data, don't guess
+
+3. **Gather Evidence in Multi-Component Systems**
+
+   **WHEN system has multiple components (CI → build → signing, API → service → database):**
+
+   **BEFORE proposing fixes, add diagnostic instrumentation:**
+   ```
+   For EACH component boundary:
+     - Log what data enters component
+     - Log what data exits component
+     - Verify environment/config propagation
+     - Check state at each layer
+
+   Run once to gather evidence showing WHERE it breaks
+   THEN analyze evidence to identify failing component
+   THEN investigate that specific component
+   ```
+
+   **Example (multi-layer system):**
+   ```bash
+   # Layer 1: Workflow
+   echo "=== Secrets available in workflow: ==="
+   echo "IDENTITY: ${{IDENTITY:+SET}}${{IDENTITY:-UNSET}}"
+
+   # Layer 2: Build script
+   echo "=== Env vars in build script: ==="
+   env | grep IDENTITY || echo "IDENTITY not in environment"
+
+   # Layer 3: Signing script
+   echo "=== Keychain state: ==="
+   security list-keychains
+   security find-identity -v
+
+   # Layer 4: Actual signing
+   codesign --sign "$IDENTITY" --verbose=4 "$APP"
+   ```
+
+   **This reveals:** Which layer fails (secrets → workflow ✓, workflow → build ✗)
+
+5. **Trace Data Flow**
+
+   **WHEN error is deep in call stack:**
+
+   **Quick version:**
+   - Where does bad value originate?
+   - What called this with bad value?
+   - Keep tracing up until you find the source
+   - Fix at source, not at symptom
+
+### Phase 2: Pattern Analysis
+
+**Find the pattern before fixing:**
+
+1. **Find Working Examples**
+   - What works that's similar to what's broken?
+
+2. **Compare Against References**
+   - If implementing pattern, read reference implementation COMPLETELY
+   - Don't skim - read every line
+   - Understand the pattern fully before applying
+
+3. **Identify Differences**
+   - What's different between working and broken?
+   - List every difference, however small
+   - Don't assume "that can't matter"
+
+4. **Understand Dependencies**
+   - What other components does this need?
+   - What settings, config, environment?
+   - What assumptions does it make?
+
+### Phase 3: Hypothesis and Testing
+
+**Scientific method:**
+
+1. **Form Single Hypothesis**
+   - State clearly: "I think X is the root cause because Y"
+   - Write it down
+   - Be specific, not vague
+
+2. **Test Minimally**
+   - Make the SMALLEST possible change to test hypothesis
+   - One variable at a time
+   - Don't fix multiple things at once
+
+3. **Verify Before Continuing**
+   - Did it work? Yes → Phase 4
+   - Didn't work? Form NEW hypothesis
+   - DON'T add more fixes on top
+
+4. **When You Don't Know**
+   - Say "I don't understand X"
+   - Don't pretend to know
+   - Ask for help
+   - Research more
+
+### Phase 4: Implementation
+
+**Fix the root cause, not the symptom:**
+
+1. **Implement Single Fix**
+   - Address the root cause identified
+   - ONE change at a time
+   - No "while I'm here" improvements
+   - No bundled refactoring
+
+2. **Verify Fix**
+   - Script runs now?
+   - Issue actually resolved?
+
+3. **If Fix Doesn't Work**
+   - STOP
+   - Count: How many fixes have you tried?
+   - If < 3: Return to Phase 1, re-analyze with new information
+   - **If ≥ 3: STOP and question the architecture (step 5 below)**
+   - DON'T attempt Fix #4 without architectural discussion
+
+## Red Flags - STOP and Follow Process
+
+If you catch yourself thinking:
+- "Quick fix for now, investigate later"
+- "Just try changing X and see if it works"
+- "Add multiple changes, run tests"
+- "Skip the test, I'll manually verify"
+- "It's probably X, let me fix that"
+- "I don't fully understand but this might work"
+- "Pattern says X but I'll adapt it differently"
+- "Here are the main problems: [lists fixes without investigation]"
+- Proposing solutions before tracing data flow
+- **"One more fix attempt" (when already tried 2+)**
+- **Each fix reveals new problem in different place**
+
+**ALL of these mean: STOP. Return to Phase 1.**
+
+## Quick Reference
+
+| Phase | Key Activities | Success Criteria |
+|-------|---------------|------------------|
+| **1. Root Cause** | Read errors, reproduce, check changes, gather evidence | Understand WHAT and WHY |
+| **2. Pattern** | Find working examples, compare | Identify differences |
+| **3. Hypothesis** | Form theory, test minimally | Confirmed or new hypothesis |
+| **4. Implementation** | Create test, fix, verify | Bug resolved, tests pass |
+
+## When Process Reveals "No Root Cause"
+
+If systematic investigation reveals issue is truly environmental, timing-dependent, or external:
+
+1. You've completed the process
+2. Document what you investigated
+3. Implement appropriate handling (retry, timeout, error message)
+4. Add monitoring/logging for future investigation
+
+**But:** 95% of "no root cause" cases are incomplete investigation.
+
+## Real-World Impact
+
+From debugging sessions:
+- Systematic approach: 15-30 minutes to fix
+- Random fixes approach: 2-3 hours of thrashing
+- First-time fix rate: 95% vs 40%
+- New bugs introduced: Near zero vs common
+
+---
+
 I ran the following command:
 `{command_str}`
 
@@ -52,14 +309,22 @@ STDERR:
 ```
 {result.stderr}
 ```
+{history_section}
 
-Provide a fixed version of the script that will likely fix the problem.
+Provide an improved version of the script that will help debug the problem.
+
+ADD PRINT OR OUTPUT STATEMENTS TO DETERMINE THE PRECISE ROOT CAUSE, AND LEARN AS MUCH AS POSSIBLE ABOUT THE STATE IN THE NEXT RUN. IF IN DOUBT ADD MORE PRINT STATEMENTS. NEVER DEBUG TO OTHER FILES, ALWAYS USE STANDARD OUT OR STANDARD ERROR.
+
 Your response should contain *only* the raw source code for the fixed script, with no explanations, formatting, or markdown.
-Never add exception handling, or silently discard errors. ALWAYS FIX THE ROOT CAUSE!
+
+Never add exception handling, or silently discard errors. IF ROOT CAUSE UNDERSTOOD: ALWAYS FIX THE ROOT CAUSE!
 If the problem seems temporary in nature, e.g. network failure, or out of disk-space, it's okay to simply call the original script and try again.
 Do not change filenames, unless absolutely necessary.
 """
-    print(">>> Command failed. Asking LLM for a fix...")
+    if attempts_history:
+        print(f">>> Attempt {len(attempts_history) + 1}: Asking LLM for an improved fix...")
+    else:
+        print(">>> Command failed. Asking LLM for a fix...")
 
     if debug:
         print("\n--- DEBUG: LLM INPUT ---")
@@ -69,10 +334,11 @@ Do not change filenames, unless absolutely necessary.
     llm_command = ["llm"]
     if model:
         llm_command += ["-m", model]
-    llm_command += [prompt.strip()]
+    #llm_command += [prompt.strip()]
 
     try:
-        llm_result = subprocess.run(llm_command, capture_output=True, text=True, check=True)
+        llm_result = subprocess.run(llm_command,
+            input=prompt.strip(), capture_output=True, text=True, check=True)
 
         if debug:
             print("\n--- DEBUG: LLM RAW OUTPUT ---")
@@ -91,9 +357,18 @@ Do not change filenames, unless absolutely necessary.
         sys.exit(1)
 
 
-def run_fixed_script(fixed_script_content, command_args):
-    """Runs the fixed script in a temporary file."""
-    
+def run_fixed_script(fixed_script_content, command_args, attempt_num=None):
+    """Runs the fixed script in a temporary file and returns the result.
+
+    Args:
+        fixed_script_content: The content of the fixed script
+        command_args: The original command arguments
+        attempt_num: The current attempt number (for display purposes)
+
+    Returns:
+        subprocess.CompletedProcess with returncode, stdout, stderr
+    """
+
     script_path = find_script_path(command_args)
     if not script_path:
         print("Could not find the original script path to create a temporary file.", file=sys.stderr)
@@ -104,14 +379,14 @@ def run_fixed_script(fixed_script_content, command_args):
         # to handle relative imports correctly.
         script_dir = os.path.dirname(script_path)
         script_ext = os.path.splitext(script_path)[1]
-        
+
         with tempfile.NamedTemporaryFile(mode='w+', delete=False, suffix=script_ext, dir=script_dir) as tmp:
             tmp.write(fixed_script_content)
             tmp.flush()
             tmp_path = tmp.name
 
         subprocess.run(['chmod', '+x', tmp_path], check=True)
-        
+
         # Construct the new command to run the temporary script
         new_command_args = list(command_args)
         try:
@@ -121,20 +396,47 @@ def run_fixed_script(fixed_script_content, command_args):
             print(f"Could not find script path '{script_path}' in command arguments.", file=sys.stderr)
             sys.exit(1)
 
-        print(f">>> LLM suggested a fix. Executing the fixed script from {tmp_path}...")
+        if attempt_num:
+            print(f">>> Executing fixed script (attempt {attempt_num})...")
+        else:
+            print(f">>> LLM suggested a fix. Executing the fixed script from {tmp_path}...")
         print("-" * 20)
-        
-        # Use Popen to stream output in real-time
+
+        # Use Popen to stream output in real-time while capturing it
+        stdout_lines = []
+        stderr_lines = []
+
+        def read_stream(stream, lines_list, output_stream):
+            """Read from a stream line by line and append to a list while printing."""
+            for line in stream:
+                print(line, end='', file=output_stream)
+                lines_list.append(line)
+
         with subprocess.Popen(new_command_args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as process:
-            if process.stdout:
-                for line in process.stdout:
-                    print(line, end='')
-            if process.stderr:
-                for line in process.stderr:
-                    print(line, end='', file=sys.stderr)
-        
+            # Read stdout and stderr concurrently using threads to avoid deadlock
+            stdout_thread = threading.Thread(target=read_stream, args=(process.stdout, stdout_lines, sys.stdout))
+            stderr_thread = threading.Thread(target=read_stream, args=(process.stderr, stderr_lines, sys.stderr))
+
+            stdout_thread.start()
+            stderr_thread.start()
+
+            # Wait for both threads to complete
+            stdout_thread.join()
+            stderr_thread.join()
+
+            # Wait for process to complete and get return code
+            process.wait()
+            returncode = process.returncode
+
         print("-" * 20)
-        print(">>> Fix execution finished.")
+
+        # Return a CompletedProcess object
+        return subprocess.CompletedProcess(
+            args=new_command_args,
+            returncode=returncode,
+            stdout=''.join(stdout_lines),
+            stderr=''.join(stderr_lines)
+        )
 
     finally:
         if 'tmp_path' in locals() and os.path.exists(tmp_path):
@@ -156,15 +458,26 @@ def main():
         help='Print the LLM input prompt and raw output for debugging.'
     )
     parser.add_argument(
+        '-r', '--max-retries',
+        type=int,
+        default=1,
+        help='Maximum number of times the LLM should attempt to fix the problem (default: 1, range: 1-10).'
+    )
+    parser.add_argument(
         'command',
         nargs=argparse.REMAINDER,
         help='The command to execute and its arguments.'
     )
     
     args = parser.parse_args()
-    
+
     if not args.command:
         parser.print_help()
+        sys.exit(1)
+
+    # Validate max_retries range
+    if args.max_retries < 1 or args.max_retries > 10:
+        print("Error: --max-retries must be between 1 and 10", file=sys.stderr)
         sys.exit(1)
         
     print(f">>> Executing command: {" ".join(args.command)}")
@@ -180,16 +493,53 @@ def main():
             print(result.stderr, file=sys.stderr)
         sys.exit(0)
     else:
+        # Original command failed, try to fix it with LLM
         script_path = find_script_path(args.command)
         script_content = read_file_content(script_path)
 
-        fix_script = get_llm_fix(args.model, script_path, script_content, args.command, result, args.debug)
+        # Keep track of all attempts
+        attempts_history = []
 
-        if fix_script:
-            run_fixed_script(fix_script, args.command)
-        else:
-            print(">>> LLM did not provide a fix.", file=sys.stderr)
-            sys.exit(result.returncode)
+        # Retry loop
+        for attempt_num in range(1, args.max_retries + 1):
+            # Get LLM fix (with history if this isn't the first attempt)
+            fix_script = get_llm_fix(
+                args.model,
+                script_path,
+                script_content,
+                args.command,
+                result,
+                args.debug,
+                attempts_history if attempt_num > 1 else None
+            )
+
+            if not fix_script:
+                print(">>> LLM did not provide a fix.", file=sys.stderr)
+                sys.exit(result.returncode)
+
+            # Run the fixed script
+            fix_result = run_fixed_script(fix_script, args.command, attempt_num)
+
+            # Check if the fix succeeded
+            if fix_result.returncode == 0:
+                print(f">>> Fix succeeded on attempt {attempt_num}/{args.max_retries}!")
+                sys.exit(0)
+
+            # Fix failed, add to history
+            attempts_history.append({
+                'attempt_num': attempt_num,
+                'fix_code': fix_script,
+                'returncode': fix_result.returncode,
+                'stdout': fix_result.stdout,
+                'stderr': fix_result.stderr
+            })
+
+            # If this wasn't the last attempt, inform the user we'll retry
+            if attempt_num < args.max_retries:
+                print(f">>> Attempt {attempt_num}/{args.max_retries} failed. Retrying...")
+            else:
+                print(f">>> All {args.max_retries} attempt(s) exhausted. Unable to fix the problem.")
+                sys.exit(fix_result.returncode)
 
 if __name__ == "__main__":
     main()

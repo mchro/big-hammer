@@ -68,8 +68,79 @@ class TestBigHammer(unittest.TestCase):
         result = subprocess.run(command_to_run, capture_output=True, text=True, env=env, cwd=self.project_root)
 
         # Assertions
-        self.assertIn("LLM suggested a fix", result.stdout, f"Stdout: {result.stdout}\nStderr: {result.stderr}")
+        self.assertIn("Executing fixed script (attempt 1)", result.stdout, f"Stdout: {result.stdout}\nStderr: {result.stderr}")
         self.assertTrue(os.path.exists(self.file_to_create_path), f"File {self.file_to_create_path} was not created. Stderr: {result.stderr}, Stdout: {result.stdout}")
+
+    def test_retry_succeeds_on_second_attempt(self):
+        """Test that retry succeeds on the second attempt after first fix fails."""
+        big_hammer_path = os.path.join(self.project_root, 'big-hammer')
+
+        # Create a fake `llm` that alternates between a bad fix and a good fix
+        fake_llm_path = os.path.join(self.test_dir, 'llm')
+        with open(fake_llm_path, 'w') as f:
+            f.write("#!/bin/bash\n")
+            f.write("# Check if this is a retry by looking for 'already tried' in the arguments\n")
+            f.write("# The llm tool receives the prompt as the last argument\n")
+            f.write("if echo \"$@\" | grep -q 'already tried'; then\n")
+            f.write("  # Second attempt - return working fix\n")
+            f.write("  echo 'import os\n")
+            f.write("os.makedirs(\"/tmp/non-existing\", exist_ok=True)\n")
+            f.write("with open(\"/tmp/non-existing/test\", \"w\") as f:\n")
+            f.write("    f.write(\"success\")'\n")
+            f.write("else\n")
+            f.write("  # First attempt - return broken fix\n")
+            f.write("  echo 'import os\n")
+            f.write("with open(\"/tmp/still-non-existing/test\", \"w\") as f:\n")
+            f.write("    f.write(\"fail\")'\n")
+            f.write("fi\n")
+
+        subprocess.run(['chmod', '+x', fake_llm_path], check=True)
+
+        # Add the tests directory to PATH
+        env = os.environ.copy()
+        env['PATH'] = self.test_dir + os.pathsep + env['PATH']
+
+        # Run with --max-retries 2
+        command_to_run = [big_hammer_path, '--max-retries', '2', 'python3', os.path.join('tests', self.script_name)]
+
+        result = subprocess.run(command_to_run, capture_output=True, text=True, env=env, cwd=self.project_root)
+
+        # Assertions
+        self.assertIn("Attempt 1/2 failed. Retrying...", result.stdout, f"Stdout: {result.stdout}\nStderr: {result.stderr}")
+        self.assertIn("Fix succeeded on attempt 2/2!", result.stdout, f"Stdout: {result.stdout}\nStderr: {result.stderr}")
+        self.assertTrue(os.path.exists(self.file_to_create_path), f"File {self.file_to_create_path} was not created. Stderr: {result.stderr}, Stdout: {result.stdout}")
+        self.assertEqual(result.returncode, 0, f"Expected exit code 0, got {result.returncode}")
+
+    def test_all_retries_exhausted(self):
+        """Test that all retries are exhausted and the command fails."""
+        big_hammer_path = os.path.join(self.project_root, 'big-hammer')
+
+        # Create a fake `llm` that always returns a broken fix
+        fake_llm_path = os.path.join(self.test_dir, 'llm')
+        with open(fake_llm_path, 'w') as f:
+            f.write("#!/bin/sh\n")
+            f.write("# Always return a broken fix that tries to write to a non-existent dir\n")
+            f.write("echo 'import os\n")
+            f.write("with open(\"/tmp/this-will-never-exist/test\", \"w\") as f:\n")
+            f.write("    f.write(\"fail\")'\n")
+
+        subprocess.run(['chmod', '+x', fake_llm_path], check=True)
+
+        # Add the tests directory to PATH
+        env = os.environ.copy()
+        env['PATH'] = self.test_dir + os.pathsep + env['PATH']
+
+        # Run with --max-retries 3
+        command_to_run = [big_hammer_path, '--max-retries', '3', 'python3', os.path.join('tests', self.script_name)]
+
+        result = subprocess.run(command_to_run, capture_output=True, text=True, env=env, cwd=self.project_root)
+
+        # Assertions
+        self.assertIn("Attempt 1/3 failed. Retrying...", result.stdout, f"Stdout: {result.stdout}\nStderr: {result.stderr}")
+        self.assertIn("Attempt 2/3 failed. Retrying...", result.stdout, f"Stdout: {result.stdout}\nStderr: {result.stderr}")
+        self.assertIn("All 3 attempt(s) exhausted. Unable to fix the problem.", result.stdout, f"Stdout: {result.stdout}\nStderr: {result.stderr}")
+        self.assertNotEqual(result.returncode, 0, f"Expected non-zero exit code, got {result.returncode}")
+        self.assertFalse(os.path.exists(self.file_to_create_path), f"File {self.file_to_create_path} should not exist")
 
 if __name__ == '__main__':
     unittest.main()

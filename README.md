@@ -106,3 +106,47 @@ By default, `big-hammer` uses the `gpt-4o` model. You can specify a different mo
 big-hammer -m gpt-3.5-turbo python3 your_script.py
 ```
 This will pass the `-m gpt-3.5-turbo` argument directly to the `llm` utility.
+
+### Iterative Fix Attempts (Retry)
+
+By default, `big-hammer` will ask the LLM to generate a fix only once. If the fix doesn't work, you can configure `big-hammer` to retry multiple times using the `-r` or `--max-retries` flag.
+
+```bash
+big-hammer --max-retries 3 python3 your_script.py
+```
+
+**How it works:**
+
+1. If the first fix fails, `big-hammer` will automatically try again.
+2. On each retry, the LLM receives information about all previous attempts, including:
+   - The code that was tried
+   - The error messages and exit codes
+   - The output from each attempt
+3. The LLM can learn from previous failures and generate progressively better fixes.
+4. The process continues until either:
+   - A fix succeeds (exit code 0)
+   - The maximum number of attempts is reached
+
+**Example output:**
+```
+>>> Executing command: python3 broken_script.py
+>>> Command failed. Asking LLM for a fix...
+>>> Executing fixed script (attempt 1)...
+--------------------
+[output from attempt 1]
+--------------------
+>>> Attempt 1/3 failed. Retrying...
+>>> Attempt 2: Asking LLM for an improved fix...
+>>> Executing fixed script (attempt 2)...
+--------------------
+[output from attempt 2]
+--------------------
+>>> Fix succeeded on attempt 2/3!
+```
+
+**Valid range:** 1-10 attempts (default: 1)
+
+**Tip:** Use retry when:
+- The problem might require multiple iterations to solve
+- The error messages provide useful feedback for improvement
+- You want the LLM to refine its approach based on failures
